@@ -1,0 +1,18 @@
+# Secrets / credentials — never commit these
+.env
+.env.*
+*.secret
+secrets.json
+credentials.json
+
+# n8n local data (may contain encrypted credentials & tokens)
+.n8n/
+*.sqlite
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+node_modules/
