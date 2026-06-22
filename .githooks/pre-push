@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Pre-push hook: scan all tracked files before pushing as a final safety net.
+cd "$(git rev-parse --show-toplevel)" || exit 0
+mapfile -t TRACKED < <(git ls-files)
+exec "$(git rev-parse --show-toplevel)/.githooks/secret-scan.sh" "${TRACKED[@]}"

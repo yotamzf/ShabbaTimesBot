@@ -109,6 +109,17 @@
 אם אתה מבצע fork או תורם לפרויקט — **לעולם אל תכניס credentials אמיתיים** לקבצי ה‑JSON
 או לקוד. n8n מנהל אותם בנפרד ובצורה מוצפנת.
 
+### Git hooks שחוסמים הדלפת סודות
+
+הריפו כולל hooks (ב‑`.githooks/`) שסורקים אוטומטית לפני כל `commit` ו‑`push` ומכשילים
+את הפעולה אם מתגלה סוד או מידע אישי (כתובת gmail אמיתית, Telegram bot token, Chat ID,
+`token`/`api_key`/`password` וכו'). placeholders בסגנון `REPLACE_WITH_...` / `@example.com`
+מותרים. כדי להפעיל אותם לאחר clone, הרץ פעם אחת:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ---
 
 ## 🛠️ פיתוח

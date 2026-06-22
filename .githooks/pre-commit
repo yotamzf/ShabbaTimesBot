@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Pre-commit hook: block the commit if staged files contain secrets/PII.
+exec "$(dirname "$0")/secret-scan.sh"
