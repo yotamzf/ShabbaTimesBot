@@ -168,12 +168,19 @@ function buildFastCandidates(jmHebcal, efHebcal) {
     const ef_b = efBeginByDate[beginDate];
     const ef_e = end ? efEndByDate[isoDatePart(end.date)] : null;
     const [y, m, d] = beginDate.split('-').map(n => parseInt(n, 10));
+    const beginMin = (() => { const t = isoTimePart(b.date); return t !== null ? timeToMin(t) : 0; })();
+    // הריצה היומית היא בבוקר (אחרי עלות השחר). צום מנהג (י"ז בתמוז, גדליה,
+    // י' בטבת, אסתר) מתחיל בעלות השחר — התראה באותו בוקר כבר תאחר, לכן מודיעים
+    // יום קודם. צום שמתחיל בערב שלפני (תשעה באב) מתחיל אחרי הבוקר, ולכן התראה
+    // באותו בוקר עדיין מגיעה לפני תחילתו.
+    const beginsInMorning = beginMin === null || beginMin < 12 * 60;
+    const notifyDate = beginsInMorning ? addDays(mkDate(y, m, d), -1) : mkDate(y, m, d);
     return {
       kind: 'fast',
       names: [nm ? (nm.hebrew || nm.title) : (b.hebrew || 'צום')],
-      notify: mkDate(y, m, d),
+      notify: notifyDate,
       onsetKey: beginKey,
-      onsetMin: (() => { const t = isoTimePart(b.date); return t ? timeToMin(t) : 0; })(),
+      onsetMin: beginMin,
       jm: { begin: isoTimePart(b.date), end: end ? isoTimePart(end.date) : null },
       ef: { begin: ef_b ? isoTimePart(ef_b.date) : isoTimePart(b.date), end: ef_e ? isoTimePart(ef_e.date) : (end ? isoTimePart(end.date) : null) },
       hebDateText: nm ? (nm.hebrew || '') : '',
