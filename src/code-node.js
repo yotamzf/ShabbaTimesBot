@@ -1,4 +1,4 @@
-// Core logic for the Shabbat/Chag/Fast/Rosh-Chodesh notifier.
+// Core logic for the Shabbat/Chag/Fast/Rosh-Chodesh/National-day notifier.
 //
 // This is the body of the "Decide and Build Email" Code node in the n8n
 // workflow (workflow/shabbat-chag-notifier.json). It runs once per day, reads
@@ -217,11 +217,11 @@ function civilMonthIndex(name, year) {
   if (leap) {
     if (name === 'Adar I' || name === 'Adar 1' || name === 'Adar') return 6;
     if (name === 'Adar II' || name === 'Adar 2') return 7;
-    const m = { Nisan: 8, Iyar: 9, Sivan: 10, Tamuz: 11, Tammuz: 11, Av: 12, Elul: 13 };
+    const m = { Nisan: 8, Iyar: 9, Iyyar: 9, Sivan: 10, Tamuz: 11, Tammuz: 11, Av: 12, Elul: 13 };
     return m[name] || null;
   }
   if (name === 'Adar' || name === 'Adar I' || name === 'Adar II') return 6;
-  const m = { Nisan: 7, Iyar: 8, Sivan: 9, Tamuz: 10, Tammuz: 10, Av: 11, Elul: 12 };
+  const m = { Nisan: 7, Iyar: 8, Iyyar: 8, Sivan: 9, Tamuz: 10, Tammuz: 10, Av: 11, Elul: 12 };
   return m[name] || null;
 }
 function moladOf(year, civilMonth) {
@@ -354,9 +354,114 @@ function prevMonthHe(g) {
 }
 const HEB_MONTH_NAME = {
   Tishrei: 'תשרי', Cheshvan: 'חשון', Kislev: 'כסלו', Tevet: 'טבת', Shevat: 'שבט',
-  Adar: 'אדר', 'Adar I': 'אדר א׳', 'Adar II': 'אדר ב׳', Nisan: 'ניסן', Iyar: 'אייר',
-  Sivan: 'סיון', Tamuz: 'תמוז', Tammuz: 'תמוז', Av: 'אב', Elul: 'אלול',
+  "Sh'vat": 'שבט', Adar: 'אדר', 'Adar I': 'אדר א׳', 'Adar II': 'אדר ב׳', Nisan: 'ניסן',
+  Iyar: 'אייר', Iyyar: 'אייר', Sivan: 'סיון', Tamuz: 'תמוז', Tammuz: 'תמוז', Av: 'אב', Elul: 'אלול',
 };
+
+// ===================== ימים לאומיים (מודרניים) =====================
+// Hebcal כבר מחזיר אותם (mod=on ב‑URL): category 'holiday', subcat 'modern'.
+// ההתראה נשלחת בבוקר שלפני היום; בימים שנפתחים בטקס ערב (יום השואה, יום
+// הזיכרון, יום העצמאות, יום ירושלים) הנוסח מציין שהערב נכנס היום.
+const NATIONAL_DAYS = {
+  'Yom HaShoah': {
+    name: 'יום הזיכרון לשואה ולגבורה', emoji: '🕯️', eveOnset: true,
+    desc: 'יום הזיכרון הממלכתי לשואה ולגבורה (כ״ז בניסן). טקס ממלכתי ביד ושם בערב, וצפירת דומייה בשעה 10:00 בבוקר.',
+  },
+  'Yom HaZikaron': {
+    name: 'יום הזיכרון לחללי מערכות ישראל ולנפגעי פעולות האיבה', emoji: '🎗️', eveOnset: true,
+    desc: 'יום הזיכרון הממלכתי לחללי מערכות ישראל ולנפגעי פעולות האיבה (ד׳ באייר). צפירה בשעה 20:00 בערב ובשעה 11:00 בבוקר.',
+  },
+  "Yom HaAtzma'ut": {
+    name: 'יום העצמאות', emoji: '🇮🇱', eveOnset: true, greeting: 'חג עצמאות שמח! 🇮🇱',
+    desc: 'יום העצמאות של מדינת ישראל (ה׳ באייר). החגיגות נפתחות בערב עם טקס הדלקת המשואות בהר הרצל.',
+  },
+  'Yom Yerushalayim': {
+    name: 'יום ירושלים', emoji: '🦁', eveOnset: true, greeting: 'חג ירושלים שמח!',
+    desc: 'יום איחוד ירושלים (כ״ח באייר) — ציון שחרור העיר העתיקה והכותל המערבי במלחמת ששת הימים (תשכ״ז).',
+  },
+  'Yom HaAliyah': {
+    name: 'יום העלייה', emoji: '✈️',
+    desc: 'יום ציון חשיבות העלייה לארץ ישראל (י׳ בניסן) — התאריך שבו חצה עם ישראל את הירדן ונכנס לארץ.',
+  },
+  'Sigd': {
+    name: 'חג הסיגד', emoji: '🙏', greeting: 'חג סיגד שמח!',
+    desc: 'חגה של קהילת ביתא ישראל — יהדות אתיופיה (כ״ט בחשוון), חמישים יום אחרי יום הכיפורים — יום צום, תפילה וכמיהה לציון.',
+  },
+  'Herzl Day': {
+    name: 'יום הרצל', emoji: '🎩',
+    desc: 'יום ממלכתי לציון פועלו וחזונו של בנימין זאב הרצל, חוזה המדינה, ביום הולדתו (י׳ באייר).',
+  },
+  'Jabotinsky Day': {
+    name: 'יום ז׳בוטינסקי', emoji: '🎗️',
+    desc: 'יום ממלכתי לציון פועלו וחזונו של זאב ז׳בוטינסקי, ביום פטירתו (כ״ט בתמוז), לפי חוק יום ז׳בוטינסקי התשס״ה.',
+  },
+  'Yitzhak Rabin Memorial Day': {
+    name: 'יום הזיכרון ליצחק רבין', emoji: '🕯️',
+    desc: 'יום הזיכרון הממלכתי לראש הממשלה יצחק רבין ז״ל, בתאריך העברי של הירצחו (י״ב בחשוון).',
+  },
+  'Ben-Gurion Day': {
+    name: 'יום בן־גוריון', emoji: '🎗️',
+    desc: 'יום ממלכתי לציון פועלו של דוד בן־גוריון, ראש הממשלה הראשון, בתאריך העברי של פטירתו (ו׳ בכסלו).',
+  },
+  'Family Day': {
+    name: 'יום המשפחה', emoji: '👨‍👩‍👧‍👦',
+    desc: 'יום המשפחה בישראל (ל׳ בשבט) — יום הולדתה של הנרייטה סאלד, מייסדת "הדסה" ואם עליית הנוער.',
+  },
+  'Hebrew Language Day': {
+    name: 'יום הלשון העברית', emoji: '✍️',
+    desc: 'יום הלשון העברית (כ״א בטבת) — יום הולדתו של אליעזר בן־יהודה, מחיה הדיבור העברי.',
+  },
+};
+
+// התאמה עמידה לשינויי גרשיים/מקפים בכותרות של Hebcal
+function normTitle(s) { return String(s || '').toLowerCase().replace(/[^a-z]/g, ''); }
+const NATIONAL_BY_NORM = {};
+for (const k of Object.keys(NATIONAL_DAYS)) NATIONAL_BY_NORM[normTitle(k)] = NATIONAL_DAYS[k];
+
+// hdate like "29 Tamuz 5786" -> "כ״ט בתמוז ה׳תשפ״ו"
+function hdateToHebText(hdate) {
+  const p = String(hdate || '').trim().split(/\s+/);
+  if (p.length < 3) return '';
+  const day = hebDay(parseInt(p[0], 10));
+  const eng = p.slice(1, p.length - 1).join(' ');
+  const month = HEB_MONTH_NAME[eng] || eng;
+  return `${day} ב${month} ${hebYear(parseInt(p[p.length - 1], 10))}`;
+}
+
+function buildNationalCandidates(jmHebcal) {
+  const items = ((jmHebcal && jmHebcal.items) || [])
+    .filter(it => it.category === 'holiday' && it.subcat === 'modern')
+    .filter(it => !/school observance/i.test(it.title || ''));
+  return items.map(it => {
+    const iso = isoDatePart(it.date);
+    const [y, m, d] = iso.split('-').map(n => parseInt(n, 10));
+    const info = NATIONAL_BY_NORM[normTitle(it.title)] || {};
+    return {
+      kind: 'national',
+      names: [info.name || it.hebrew || it.title],
+      notify: addDays(mkDate(y, m, d), -1),
+      onsetKey: isoToKey(iso),
+      onsetMin: 0,
+      emoji: info.emoji || '🇮🇱',
+      desc: info.desc || '',
+      greeting: info.greeting || null,
+      eveOnset: !!info.eveOnset,
+      thisDow: HEB_DOW[dowOfIso(iso)],
+      hebDateText: hdateToHebText(it.hdate),
+      dayIso: iso,
+    };
+  });
+}
+
+function nationalLeadLine(c) {
+  return c.eveOnset
+    ? `הערב ייכנס ${c.names[0]}, שיחול מחר — יום ${c.thisDow}, ${c.hebDateText}.`
+    : `מחר, יום ${c.thisDow} (${c.hebDateText}), יחול ${c.names[0]}.`;
+}
+function isoToLoazi(iso) {
+  const [y, m, d] = iso.split('-').map(n => parseInt(n, 10));
+  return `${d}.${m}.${y}`;
+}
 
 function moladText(m) {
   if (!m) return null;
@@ -492,7 +597,53 @@ function renderRoshChodeshHtml(c) {
   });
 }
 
+function renderNationalHtml(c) {
+  const descHtml = c.desc ? `
+    <div style="font-size:15px;line-height:1.7;color:#2a3b5c;margin:0 2px 14px;">
+      ${c.desc}
+    </div>` : '';
+  const greetHtml = c.greeting ? `
+    <div style="font-size:16px;font-weight:700;color:#0038b8;margin-top:14px;text-align:center;">
+      ${c.greeting}
+    </div>` : '';
+  return baseEmail(`${c.emoji} ${c.names[0]}`, c.hebDateText, `
+    <div style="font-size:17px;line-height:1.7;color:#1b2b4b;font-weight:700;margin:4px 2px 12px;">
+      ${nationalLeadLine(c)}
+    </div>
+    ${descHtml}
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:4px;">
+      <tr style="background:#0038b8;color:#fff;">
+        <th style="padding:10px 14px;text-align:right;font-size:14px;font-weight:600;" colspan="2">פרטי היום</th>
+      </tr>
+      <tr style="background:#f0f4fd;">
+        <td style="padding:12px 14px;font-weight:600;color:#0038b8;width:38%;">תאריך עברי</td>
+        <td style="padding:12px 14px;color:#1b2b4b;font-size:15px;">${c.hebDateText}</td>
+      </tr>
+      <tr>
+        <td style="padding:12px 14px;font-weight:600;color:#0038b8;">תאריך לועזי</td>
+        <td style="padding:12px 14px;color:#1b2b4b;font-size:15px;">יום ${c.thisDow}, ${isoToLoazi(c.dayIso)}</td>
+      </tr>
+    </table>
+    ${greetHtml}`, {
+    grad: 'linear-gradient(135deg,#0038b8,#3a66c9)',
+    subColor: '#cfe0ff',
+    footer: 'נשלח אוטומטית לפי הלוח העברי',
+  });
+}
+
 function renderTelegram(c) {
+  if (c.kind === 'national') {
+    const lines = [
+      `${c.emoji} <b>${c.names[0]}</b>`,
+      c.hebDateText,
+      '',
+      `<b>${nationalLeadLine(c)}</b>`,
+    ];
+    if (c.desc) lines.push('', c.desc);
+    if (c.greeting) lines.push('', c.greeting);
+    lines.push('', 'נשלח אוטומטית לפי הלוח העברי');
+    return lines.join('\n');
+  }
   if (c.kind === 'roshchodesh') {
     const lines = [
       `${rcTitle(c)}`,
@@ -570,6 +721,11 @@ function baseEmail(title, subtitle, bodyHtml, opts) {
 }
 
 function subjectFor(c) {
+  if (c.kind === 'national') {
+    return c.eveOnset
+      ? `${c.names[0]} — הערב ומחר (יום ${c.thisDow})`
+      : `${c.names[0]} — מחר, יום ${c.thisDow}`;
+  }
   if (c.kind === 'fast') return `${c.names[0]} — זמני הצום (ירושלים ואפרת)`;
   if (c.kind === 'roshchodesh') {
     return (c.totalDays === 2 && c.dayIndex === 2)
@@ -581,6 +737,7 @@ function subjectFor(c) {
 function htmlFor(c) {
   if (c.kind === 'fast') return renderFastHtml(c);
   if (c.kind === 'roshchodesh') return renderRoshChodeshHtml(c);
+  if (c.kind === 'national') return renderNationalHtml(c);
   return renderShabbatHtml(c);
 }
 
@@ -590,7 +747,8 @@ function buildResults(input) {
   const shabbat = buildShabbatCandidates(jmTimes, efTimes);
   const fasts = buildFastCandidates(input.jmHebcal, input.efHebcal);
   const rc = buildRoshChodeshCandidates(input.jmHebcal);
-  const all = shabbat.concat(fasts).concat(rc);
+  const national = buildNationalCandidates(input.jmHebcal);
+  const all = shabbat.concat(fasts).concat(rc).concat(national);
 
   const today = input.today;
   const dueToday = all.filter(c => c.notify.key === today.key);
