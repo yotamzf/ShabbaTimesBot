@@ -26,19 +26,6 @@
     {
       "parameters": {
         "url": "=https://www.yeshiva.org.il/calendar/shabatot?place=%D7%99%D7%A8%D7%95%D7%A9%D7%9C%D7%99%D7%9D&year={{ $now.setZone('Asia/Jerusalem').year + 3760 }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "User-Agent",
-              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            },
-            {
-              "name": "Accept-Language",
-              "value": "he-IL,he;q=0.9"
-            }
-          ]
-        },
         "options": {
           "response": {
             "response": {
@@ -64,20 +51,6 @@
     {
       "parameters": {
         "url": "=https://www.yeshiva.org.il/calendar/shabatot?place=%D7%99%D7%A8%D7%95%D7%A9%D7%9C%D7%99%D7%9D&year={{ $now.setZone('Asia/Jerusalem').year + 3761 }}",
-        "sendHeaders": true,
-        "specifyHeaders": "keypair",
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "User-Agent",
-              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            },
-            {
-              "name": "Accept-Language",
-              "value": "he-IL,he;q=0.9"
-            }
-          ]
-        },
         "options": {
           "response": {
             "response": {
@@ -106,19 +79,6 @@
     {
       "parameters": {
         "url": "=https://www.yeshiva.org.il/calendar/shabatot?place=%D7%90%D7%A4%D7%A8%D7%AA&year={{ $now.setZone('Asia/Jerusalem').year + 3760 }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "User-Agent",
-              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            },
-            {
-              "name": "Accept-Language",
-              "value": "he-IL,he;q=0.9"
-            }
-          ]
-        },
         "options": {
           "response": {
             "response": {
@@ -144,20 +104,6 @@
     {
       "parameters": {
         "url": "=https://www.yeshiva.org.il/calendar/shabatot?place=%D7%90%D7%A4%D7%A8%D7%AA&year={{ $now.setZone('Asia/Jerusalem').year + 3761 }}",
-        "sendHeaders": true,
-        "specifyHeaders": "keypair",
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "User-Agent",
-              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-            },
-            {
-              "name": "Accept-Language",
-              "value": "he-IL,he;q=0.9"
-            }
-          ]
-        },
         "options": {
           "response": {
             "response": {
