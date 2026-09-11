@@ -10,24 +10,29 @@
 // Gmail/Telegram nodes, managed encrypted by n8n. See README.md for details.
 
 // ===================== תצורה =====================
-// מקור הזמנים הראשי הוא אתר ישיבה. כשהוא לא זמין (למשל חסימת
-// Cloudflare, שהפילה את הבוט ב‑10‑11.9.2026) נופלים ל‑Hebcal.
+// מקור הזמנים הראשי הוא Hebcal (REST API יציב), עם ue=on כדי שהחישוב
+// יתחשב בגובה מעל פני הים. אתר ישיבה משמש רק להעשרת זמן רבינו תם,
+// ש‑Hebcal אינו מספק בנקודת הקצה הזו.
 //
-// ⚠️ הזמנים מ‑Hebcal עשויים להיות שונים בדקות ספורות מאלו של אתר ישיבה,
-// כי ההיסט מהשקיעה וכלל הצאת הכוכבים נקבעים שונה. לכן כל הודעה
-// שנשלחת מהמקור החלופי מסומנת בבאנר מפורש.
+// למה לא אתר ישיבה כמקור ראשי — נבדק 11.9.2026 מול נתונים חיים:
+//   1. מערך times שלו מכסה שנה עברית אחת בדיוק. ב‑11.9.2026 השורה
+//      האחרונה הייתה 5/9/2026, ולכן בערב ראש השנה הבוט "לא ראה" אירוע
+//      ושתק — בלי שגיאה ובלי הודעה. חוזר על עצמו מדי שנה.
+//      הפרמטר year= פותר את זה, אבל דורש למשוך שתי שנים עבריות ולמזג.
+//   2. ב‑10‑11.9.2026 האתר היה חסום מאחורי Cloudflare והחזיר 403.
 //
-// היסט הדלקת נרות (דקות לפני השקיעה) עבור מצב ה‑fallback בלבד.
-// ירושלים: 40 דקות — מנהג ירושלים המקובל.
-// אפרת: 20 דקות — ברירת המחדל הישראלית. לשינוי עדכן גם את פרמטר b=
-// ב‑URL של הנוד "Fetch Efrat Shabbat (Hebcal)" ב‑workflow.
-const CANDLE_MIN_JM = 40;
-const CANDLE_MIN_EF = 20;
+// דיוק: עם ue=on ההפרש בין Hebcal לאתר ישיבה נמדד כדקה אחת לכל היותר
+// (ירושלים 18:14 מול 18:15, אפרת 18:35 מול 18:34 — שבת ראש השנה תשפ"ז).
+//
+// היסט הדלקת נרות בדקות לפני השקיעה — חייב להתאים לפרמטר b= שב‑URL.
+const CANDLE_MIN_JM = 40; // מנהג ירושלים
+const CANDLE_MIN_EF = 20; // אומת מול אתר ישיבה — הפרש דקה
+// פער בדקות בין המקורות שמעליו מצורפת אזהרה להודעה.
+const CROSSCHECK_TOLERANCE_MIN = 3;
 
+const SOURCE_HEBCAL = { id: 'hebcal', label: 'לפי זמני Hebcal' };
 const SOURCE_YESHIVA = { id: 'yeshiva', label: 'לפי זמני אתר ישיבה' };
-const SOURCE_HEBCAL = { id: 'hebcal', label: 'לפי זמני Hebcal (מקור חלופי)' };
-const SOURCE_HEBCAL_PRIMARY = { id: 'hebcal', label: 'לפי זמני Hebcal' };
-const DEGRADED_NOTE = 'אתר ישיבה אינו זמין כרגע — הזמנים לקוחים מ‑Hebcal ועשויים להיות שונים בדקות ספורות. זמן רבינו תם אינו זמין במצב זה.';
+const FALLBACK_NOTE = 'Hebcal לא החזיר זמנים לאירוע הזה — הזמנים לקוחים מאתר ישיבה.';
 
 function decodeJsString(s) {
   return s.replace(/\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)/g, (seq, c) => {
@@ -251,6 +256,59 @@ function buildShabbatCandidatesFromHebcal(jmHebcal, efHebcal) {
       havdalahDateIso: havdalahIso,
     };
   });
+}
+
+// ===== שילוב שני המקורות =====
+// אתר ישיבה מחזיר שנה עברית אחת לכל בקשה, ולכן מושכים שתי שנים (הנוכחית
+// והבאה) וממזגים — כך אין "חור" בערב ראש השנה כשהשנה מתחלפת.
+function mergeYeshivaTimes(htmls) {
+  const seen = {};
+  const out = [];
+  for (const html of htmls) {
+    if (!html) continue;
+    let rows;
+    try { rows = extractTimes(html); } catch (e) { continue; }
+    for (const r of rows) {
+      if (seen[r.loaziDate]) continue;
+      seen[r.loaziDate] = true;
+      out.push(r);
+    }
+  }
+  out.sort((a, b) => parseLoazi(a.loaziDate).key - parseLoazi(b.loaziDate).key);
+  return out;
+}
+
+function minutesApart(a, b) {
+  const x = timeToMin(a), y = timeToMin(b);
+  if (x === null || y === null) return null;
+  return Math.abs(x - y);
+}
+
+// Hebcal הוא המקור; מאתר ישיבה לוקחים רק את זמן רבינו תם, ומשווים את
+// שאר הזמנים כבדיקת שפיות. פער חריג מסומן בהודעה במקום להיבלע.
+function enrichFromYeshiva(hebcalCandidates, yeshivaCandidates) {
+  const byDate = {};
+  for (const y of yeshivaCandidates) byDate[y.candleDateIso] = y;
+  for (const c of hebcalCandidates) {
+    const y = byDate[c.candleDateIso];
+    if (!y) continue;
+    c.jm.havdalahRT = y.jm.havdalahRT || null;
+    c.ef.havdalahRT = y.ef.havdalahRT || null;
+    const deltas = [
+      minutesApart(c.jm.candle, y.jm.candle),
+      minutesApart(c.jm.havdalah, y.jm.havdalah),
+      minutesApart(c.ef.candle, y.ef.candle),
+      minutesApart(c.ef.havdalah, y.ef.havdalah),
+    ].filter(d => d !== null);
+    if (deltas.length) {
+      const worst = Math.max.apply(null, deltas);
+      c.crossCheckMaxDelta = worst;
+      if (worst > CROSSCHECK_TOLERANCE_MIN) {
+        c.crossCheckWarning = `פער של ${worst} דק׳ בין Hebcal לאתר ישיבה — כדאי לאמת ידנית.`;
+      }
+    }
+  }
+  return hebcalCandidates;
 }
 
 function isoDatePart(iso) { return iso.slice(0, 10); }
@@ -641,7 +699,7 @@ function renderShabbatHtml(c) {
          <td style="padding:6px 14px;color:#7a8aa0;font-size:13px;text-align:center;">${c.jm.havdalahRT || '—'}</td>
          <td style="padding:6px 14px;color:#7a8aa0;font-size:13px;text-align:center;">${c.ef.havdalahRT || '—'}</td></tr>`
     : '';
-  const banner = c.degraded ? degradedBannerHtml() : '';
+  const banner = noticeHtml(c);
   return baseEmail(`🕯️ ${title}`, c.hebDateText, `
     ${banner}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:8px;">
@@ -661,11 +719,16 @@ function renderShabbatHtml(c) {
         <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#2c5d8f;">${c.ef.havdalah || '—'}</td>
       </tr>
       ${rtRow}
-    </table>`, { footer: `שבת שלום ומבורך · נשלח אוטומטית ${c.sourceLabel || SOURCE_YESHIVA.label}` });
+    </table>`, { footer: `שבת שלום ומבורך · נשלח אוטומטית ${c.sourceLabel || SOURCE_HEBCAL.label}` });
 }
 
-function degradedBannerHtml() {
-  return `<div style="background:#fff6e5;border:1px solid #f0c674;border-radius:10px;padding:10px 12px;margin-bottom:4px;color:#8a5a00;font-size:13px;line-height:1.55;">⚠️ ${DEGRADED_NOTE}</div>`;
+// באנר צהוב רק כשבאמת יש מה לומר: מקור חלופי, או פער חריג בין המקורות.
+function noticeHtml(c) {
+  const bits = [];
+  if (c.sourceNote) bits.push(c.sourceNote);
+  if (c.crossCheckWarning) bits.push(c.crossCheckWarning);
+  if (!bits.length) return '';
+  return `<div style="background:#fff6e5;border:1px solid #f0c674;border-radius:10px;padding:10px 12px;margin-bottom:4px;color:#8a5a00;font-size:13px;line-height:1.55;">⚠️ ${bits.join('<br>')}</div>`;
 }
 
 function renderAlertHtml() {
@@ -707,7 +770,7 @@ function renderFastHtml(c) {
         <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#2c5d8f;">${c.jm.end || '—'}</td>
         <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#2c5d8f;">${c.ef.end || '—'}</td>
       </tr>
-    </table>`, { footer: `צום קל ומועיל · נשלח אוטומטית ${c.sourceLabel || SOURCE_HEBCAL_PRIMARY.label}` });
+    </table>`, { footer: `צום קל ומועיל · נשלח אוטומטית ${c.sourceLabel || SOURCE_HEBCAL.label}` });
 }
 
 function renderRoshChodeshHtml(c) {
@@ -823,7 +886,7 @@ function renderTelegram(c) {
       `ירושלים: ${c.jm.end || '—'}`,
       `אפרת: ${c.ef.end || '—'}`,
       '',
-      `צום קל ומועיל · ${c.sourceLabel || SOURCE_HEBCAL_PRIMARY.label}`,
+      `צום קל ומועיל · ${c.sourceLabel || SOURCE_HEBCAL.label}`,
     ].join('\n');
   }
   const lines = [
@@ -839,8 +902,9 @@ function renderTelegram(c) {
   if (c.jm.havdalahRT || c.ef.havdalahRT) {
     lines.push(`<i>צאת ר"ת — ירושלים: ${c.jm.havdalahRT || '—'} · אפרת: ${c.ef.havdalahRT || '—'}</i>`);
   }
-  if (c.degraded) lines.push('', `⚠️ <i>${DEGRADED_NOTE}</i>`);
-  lines.push('', `שבת שלום ומבורך · ${c.sourceLabel || SOURCE_YESHIVA.label}`);
+  if (c.sourceNote) lines.push('', `⚠️ <i>${c.sourceNote}</i>`);
+  if (c.crossCheckWarning) lines.push('', `⚠️ <i>${c.crossCheckWarning}</i>`);
+  lines.push('', `שבת שלום ומבורך · ${c.sourceLabel || SOURCE_HEBCAL.label}`);
   return lines.join('\n');
 }
 
@@ -895,32 +959,51 @@ function htmlFor(c) {
 }
 
 function buildResults(input) {
-  // מקור ראשי: אתר ישיבה. אם הוא חסום או מחזיר HTML לא צפוי — נופלים ל‑Hebcal.
-  let shabbat = [];
-  let source = SOURCE_YESHIVA;
+  // מקור ראשי: Hebcal. אתר ישיבה משמש להעשרת ר"ת ולהצלבה.
+  let shabbatSource = SOURCE_HEBCAL;
+  let hebcalShabbat = [];
   try {
-    if (!input.jmHtml || !input.efHtml) throw new Error('yeshiva.org.il unavailable');
-    shabbat = buildShabbatCandidates(extractTimes(input.jmHtml), extractTimes(input.efHtml));
-    if (shabbat.length === 0) throw new Error('yeshiva.org.il returned no times');
+    hebcalShabbat = buildShabbatCandidatesFromHebcal(input.jmShabbat, input.efShabbat);
   } catch (e) {
-    source = SOURCE_HEBCAL;
-    try {
-      shabbat = buildShabbatCandidatesFromHebcal(input.jmShabbat, input.efShabbat);
-    } catch (e2) {
-      shabbat = [];
-    }
+    hebcalShabbat = [];
   }
-  const degraded = source === SOURCE_HEBCAL;
-  const shabbatDown = degraded && shabbat.length === 0;
-  shabbat.forEach(c => { c.sourceLabel = source.label; c.degraded = degraded; });
+
+  let yeshivaShabbat = [];
+  try {
+    const jmRows = mergeYeshivaTimes(input.jmHtmls || []);
+    const efRows = mergeYeshivaTimes(input.efHtmls || []);
+    if (jmRows.length) yeshivaShabbat = buildShabbatCandidates(jmRows, efRows);
+  } catch (e) {
+    yeshivaShabbat = [];
+  }
+
+  const today = input.today;
+  const dueIn = list => list.filter(c => c.notify.key === today.key);
+
+  // הצלבה: אם מקור אחד מזהה אירוע להיום והשני שותק — הולכים אחרי זה
+  // שיש לו נתונים, במקום לשתוק. זה הבאג שהפיל את ערב ראש השנה תשפ"ז.
+  let shabbat;
+  let sourceNote = null;
+  if (dueIn(hebcalShabbat).length > 0 || dueIn(yeshivaShabbat).length === 0) {
+    shabbat = enrichFromYeshiva(hebcalShabbat, yeshivaShabbat);
+  } else {
+    shabbat = yeshivaShabbat;
+    shabbatSource = SOURCE_YESHIVA;
+    sourceNote = FALLBACK_NOTE;
+  }
+  const shabbatDown = dueIn(hebcalShabbat).length === 0 && dueIn(yeshivaShabbat).length === 0
+    && hebcalShabbat.length === 0 && yeshivaShabbat.length === 0;
+  shabbat.forEach(c => {
+    c.sourceLabel = shabbatSource.label;
+    if (sourceNote) c.sourceNote = sourceNote;
+  });
 
   const fasts = buildFastCandidates(input.jmHebcal, input.efHebcal);
   const rc = buildRoshChodeshCandidates(input.jmHebcal);
   const national = buildNationalCandidates(input.jmHebcal);
   const all = shabbat.concat(fasts).concat(rc).concat(national);
-  all.forEach(c => { if (!c.sourceLabel) c.sourceLabel = SOURCE_HEBCAL_PRIMARY.label; });
+  all.forEach(c => { if (!c.sourceLabel) c.sourceLabel = SOURCE_HEBCAL.label; });
 
-  const today = input.today;
   const dueToday = all.filter(c => c.notify.key === today.key);
   dueToday.sort((a, b) => (a.onsetKey - b.onsetKey) || (a.onsetMin - b.onsetMin));
 
@@ -967,14 +1050,15 @@ function safeHtml(name) {
   return j && typeof j.data === 'string' ? j.data : null;
 }
 
-const jmHtml = safeHtml("Fetch Jerusalem Times");
-const efHtml = safeHtml("Fetch Efrat Times");
+// אתר ישיבה מחזיר שנה עברית אחת לכל בקשה, ולכן מושכים שתי שנים לכל עיר
+// וממזגים. בלי זה נוצר "חור" בערב ראש השנה, כשהשנה מתחלפת.
+const jmHtmls = [safeHtml("Fetch Jerusalem Times"), safeHtml("Fetch Jerusalem Times (Next Year)")];
+const efHtmls = [safeHtml("Fetch Efrat Times"), safeHtml("Fetch Efrat Times (Next Year)")];
 const jmHebcal = safeNode("Fetch Jerusalem Fasts");
 const efHebcal = safeNode("Fetch Efrat Fasts");
 const jmShabbat = safeNode("Fetch Jerusalem Shabbat (Hebcal)");
 const efShabbat = safeNode("Fetch Efrat Shabbat (Hebcal)");
 const now = $now.setZone("Asia/Jerusalem");
 const today = mkDate(now.year, now.month, now.day);
-const results = buildResults({ jmHtml, efHtml, jmHebcal, efHebcal, jmShabbat, efShabbat, today });
-// One n8n item per notification due today (e.g. Shabbat + Rosh Chodesh can both fire).
+const results = buildResults({ jmHtmls, efHtmls, jmHebcal, efHebcal, jmShabbat, efShabbat, today });
 return results.map(r => ({ json: r }));
