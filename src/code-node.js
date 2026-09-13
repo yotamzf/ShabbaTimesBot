@@ -135,6 +135,10 @@ function buildShabbatCandidates(jmTimes, efTimes) {
     return {
       kind: 'shabbat',
       names: block.map(labelFor),
+      days: block.map(ev => ({ iso: parseLoazi(ev.loaziDate).iso, name: labelFor(ev) })),
+      dayIsos: block.map(ev => parseLoazi(ev.loaziDate).iso),
+      extraCandles: [],
+      eventDateIso: parseLoazi(firstEv.loaziDate).iso,
       notify: candleDate,
       onsetKey: candleDate.key,
       onsetMin: timeToMin(firstReal(block, 'startTime')) || 0,
@@ -198,20 +202,23 @@ function blockDayIsos(block) {
   return out;
 }
 
-function hebcalNamesFor(hebcal, dayIsos) {
+// יום‑יום בתוך הבלוק, עם השם שלו — כדי שההודעה תפרט גם חג בן יומיים
+// (למשל ראש השנה שנכנס בשבת ונמשך ביום ראשון) ולא רק את קצוות הבלוק.
+function hebcalDaysFor(hebcal, dayIsos) {
   const items = hebcalItems(hebcal);
-  const names = [];
+  const days = [];
   for (const iso of dayIsos) {
     const sameDay = items.filter(it => isoDatePart(it.date) === iso);
     // yomtov מבדיל יום טוב אמיתי (ראש השנה, פסח) מחנוכה/פורים שאינם חלים כאן.
     const yt = sameDay.find(it => it.category === 'holiday' && it.yomtov === true);
-    if (yt) { names.push(yt.hebrew || yt.title); continue; }
+    if (yt) { days.push({ iso, name: yt.hebrew || yt.title }); continue; }
     if (dowOfIso(iso) === 6) {
       const par = sameDay.find(it => it.category === 'parashat');
-      names.push(par ? `שבת ${par.hebrew || par.title}` : 'שבת');
+      days.push({ iso, name: par ? `שבת ${par.hebrew || par.title}` : 'שבת' });
     }
   }
-  return names.length ? names : ['שבת'];
+  if (days.length) return days;
+  return (dayIsos.length ? dayIsos : ['']).map(iso => ({ iso, name: 'שבת' }));
 }
 
 function hebcalHebDateText(hebcal, dayIsos) {
@@ -227,17 +234,41 @@ function buildShabbatCandidatesFromHebcal(jmHebcal, efHebcal) {
       efByDate[it.category + '|' + isoDatePart(it.date)] = it;
     }
   }
-  return hebcalBlocks(jmHebcal).map(block => {
+  // חלון הזמן של Hebcal מתחיל בתאריך הריצה, ולכן ריצה שנופלת *בתוך* בלוק
+  // (בוקר שבת שנכנסת לחג) רואה בלוק קטוע שהדלקת הנרות הראשונה שלו היא
+  // מוצאי שבת. זה המשך של אירוע שכבר התחיל — לא אירוע חדש. מזוהה בכך שיום
+  // ההדלקה עצמו הוא שבת/יום טוב, ונזרק כדי שלא תישלח עליו התראה כפולה.
+  const ytSet = yomTovIsoSet([jmHebcal]);
+  return hebcalBlocks(jmHebcal)
+    .filter(b => !isRestIso(isoDatePart(b.candles[0].date), ytSet))
+    .map(block => {
     const firstCandle = block.candles[0];
     const candleIso = isoDatePart(firstCandle.date);
     const candleDate = isoToDate(candleIso);
     const havdalahIso = isoDatePart(block.havdalah.date);
     const dayIsos = blockDayIsos(block);
+    const days = hebcalDaysFor(jmHebcal, dayIsos);
     const efCandle = efByDate['candles|' + candleIso];
     const efHav = efByDate['havdalah|' + havdalahIso];
+    // הדלקות נרות שבאמצע הבלוק — למשל ליל שני של ראש השנה, שנכנס במוצאי
+    // שבת. בלעדיהן ההודעה על חג בן יומיים חסרה את הזמן של היום השני.
+    const extraCandles = block.candles.slice(1).map(it => {
+      const iso = isoDatePart(it.date);
+      const ef = efByDate['candles|' + iso];
+      return {
+        dateIso: iso,
+        forDayIso: addDays(isoToDate(iso), 1).iso,
+        jm: isoTimePart(it.date),
+        ef: ef ? isoTimePart(ef.date) : null,
+      };
+    });
     return {
       kind: 'shabbat',
-      names: hebcalNamesFor(jmHebcal, dayIsos),
+      names: days.map(d => d.name),
+      days,
+      dayIsos,
+      extraCandles,
+      eventDateIso: dayIsos[0] || candleIso,
       notify: candleDate,
       onsetKey: candleDate.key,
       onsetMin: timeToMin(isoTimePart(firstCandle.date)) || 0,
@@ -255,7 +286,7 @@ function buildShabbatCandidatesFromHebcal(jmHebcal, efHebcal) {
       candleDateIso: candleIso,
       havdalahDateIso: havdalahIso,
     };
-  });
+    });
 }
 
 // ===== שילוב שני המקורות =====
@@ -321,6 +352,46 @@ function isoToKey(isoDate) {
   return y * 10000 + m * 100 + d;
 }
 
+// ================= ימי מנוחה: שבת ויום טוב =================
+// הבוט לא שולח דבר בשבת ובחג. שתי מסקנות נובעות מזה:
+//   1. ריצה שנופלת בשבת/חג מסתיימת בלי הודעה — גם אם יש אירוע מחר.
+//   2. אירוע שהערב שלפניו חל בשבת/חג מוקדם אחורה, ליום החול האחרון שלפניו,
+//      כדי שההתראה תגיע עוד לפני כניסת השבת/החג ולא אחריה.
+// זיהוי יום טוב נשען על שני מקורות בלתי תלויים: הדגל yomtov של Hebcal,
+// וכל יום הכלוא בין הדלקת נרות להבדלה בבלוק שלם.
+
+function yomTovIsoSet(hebcals) {
+  const s = {};
+  for (const h of hebcals) {
+    for (const it of hebcalItems(h)) {
+      if (it.category === 'holiday' && it.yomtov === true) s[isoDatePart(it.date)] = true;
+    }
+  }
+  return s;
+}
+
+function addBlockRestDays(set, hebcal) {
+  let blocks = [];
+  try { blocks = hebcalBlocks(hebcal); } catch (e) { blocks = []; }
+  for (const b of blocks) for (const iso of blockDayIsos(b)) set[iso] = true;
+  return set;
+}
+
+function isRestIso(iso, restSet) { return dowOfIso(iso) === 6 || !!(restSet && restSet[iso]); }
+function isRestDate(dt, restSet) { return isRestIso(dt.iso, restSet); }
+
+// היום האחרון שאינו שבת/חג, ביום הנתון או לפניו (עד שבוע אחורה).
+function lastWeekdayOnOrBefore(dt, restSet) {
+  let d = dt;
+  for (let i = 0; i < 8 && isRestDate(d, restSet); i++) d = addDays(d, -1);
+  return d;
+}
+
+// הפרש בימים: b פחות a.
+function daysBetween(a, b) {
+  return Math.round((Date.UTC(b.y, b.m - 1, b.d) - Date.UTC(a.y, a.m - 1, a.d)) / 86400000);
+}
+
 function buildFastCandidates(jmHebcal, efHebcal) {
   const jmItems = (jmHebcal && jmHebcal.items) || [];
   const efItems = (efHebcal && efHebcal.items) || [];
@@ -358,12 +429,14 @@ function buildFastCandidates(jmHebcal, efHebcal) {
     return {
       kind: 'fast',
       names: [nm ? (nm.hebrew || nm.title) : (b.hebrew || 'צום')],
+      eveOnset: !beginsInMorning,
+      eventDateIso: nm ? isoDatePart(nm.date) : beginDate,
       notify: notifyDate,
       onsetKey: beginKey,
       onsetMin: beginMin,
       jm: { begin: isoTimePart(b.date), end: end ? isoTimePart(end.date) : null },
       ef: { begin: ef_b ? isoTimePart(ef_b.date) : isoTimePart(b.date), end: ef_e ? isoTimePart(ef_e.date) : (end ? isoTimePart(end.date) : null) },
-      hebDateText: nm ? (nm.hebrew || '') : '',
+      hebDateText: nm && nm.hdate ? hdateToHebText(nm.hdate) : '',
       fastDateIso: nm ? isoDatePart(nm.date) : beginDate,
     };
   });
@@ -502,6 +575,7 @@ function buildRoshChodeshCandidates(jmHebcal) {
         kind: 'roshchodesh',
         monthHe,
         names: [`ראש חודש ${monthHe}`],
+        eventDateIso: iso,
         notify: addDays(mkDate(y, m, d), -1),
         onsetKey: isoToKey(iso),
         onsetMin: 0,
@@ -619,6 +693,7 @@ function buildNationalCandidates(jmHebcal) {
     return {
       kind: 'national',
       names: [info.name || it.hebrew || it.title],
+      eventDateIso: iso,
       notify: addDays(mkDate(y, m, d), -1),
       onsetKey: isoToKey(iso),
       onsetMin: 0,
@@ -633,10 +708,41 @@ function buildNationalCandidates(jmHebcal) {
   });
 }
 
+// ===== ניסוח תזמון =====
+// leadDays = כמה ימים מהיום שבו נשלחת ההתראה ועד יום האירוע. 1 = המצב הרגיל
+// (האירוע מחר). ערך גדול יותר נוצר כשההתראה הוקדמה כי הערב שלפני האירוע
+// חל בשבת/חג — ואז הניסוח "הערב"/"מחר" שגוי וצריך להחליפו.
+const EARLY_NOTE = 'ההתראה נשלחת מוקדם מהרגיל: הערב שלפני האירוע חל בשבת או בחג, ' +
+  'והבוט אינו שולח הודעות בשבת ובחג.';
+
+function leadDaysOf(c) { return c.leadDays == null ? 1 : c.leadDays; }
+
+function whenPhrase(c) {
+  const n = leadDaysOf(c);
+  const dow = c.eventDateIso ? `יום ${HEB_DOW[dowOfIso(c.eventDateIso)]}` : null;
+  if (n <= 0) return dow ? `היום, ${dow}` : 'היום';
+  if (n === 1) return dow ? `מחר, ${dow}` : 'מחר';
+  if (n === 2) return dow ? `מחרתיים, ${dow}` : 'מחרתיים';
+  return dow ? `ב${dow} הקרוב` : `בעוד ${n} ימים`;
+}
+
 function nationalLeadLine(c) {
+  if (leadDaysOf(c) > 1) {
+    return `${c.names[0]} יחול ${whenPhrase(c)}${c.hebDateText ? ` (${c.hebDateText})` : ''}.` +
+      (c.eveOnset ? ' היום נפתח בטקס ובאירועים כבר בערב שלפניו.' : '');
+  }
   return c.eveOnset
     ? `הערב ייכנס ${c.names[0]}, שיחול מחר — יום ${c.thisDow}, ${c.hebDateText}.`
     : `מחר, יום ${c.thisDow} (${c.hebDateText}), יחול ${c.names[0]}.`;
+}
+
+function fastLeadLine(c) {
+  const dateBit = c.hebDateText ? ` (${c.hebDateText})` : '';
+  if (c.eveOnset && leadDaysOf(c) === 1) {
+    return `הצום נכנס הערב — ${c.names[0]} יחול ${whenPhrase(c)}${dateBit}.`;
+  }
+  const onset = c.eveOnset ? 'הצום נכנס בערב שלפניו.' : 'הצום מתחיל עם עלות השחר.';
+  return `${c.names[0]} יחול ${whenPhrase(c)}${dateBit}. ${onset}`;
 }
 function isoToLoazi(iso) {
   const [y, m, d] = iso.split('-').map(n => parseInt(n, 10));
@@ -667,6 +773,10 @@ function rcAnnouncementLine(c) {
 }
 // Day-specific lead: the notification runs in the MORNING of erev (the day before this RC day).
 function rcLeadLine(c) {
+  if (leadDaysOf(c) > 1) {
+    if (c.totalDays === 1) return `ראש חודש ${c.monthHe} יחול ${whenPhrase(c)}.`;
+    return `ראש חודש ${c.monthHe} יחול ${whenPhrase(c)}, ויימשך גם ביום ${c.dows[1]}.`;
+  }
   if (c.totalDays === 1) {
     return `הערב נכנס ראש חודש ${c.monthHe}. ראש חודש יחול מחר, ביום ${c.thisDow}.`;
   }
@@ -676,6 +786,7 @@ function rcLeadLine(c) {
   return `היום (יום ${c.dows[0]}) יומו הראשון של ראש חודש ${c.monthHe}; הערב נכנס יומו השני (מחר, יום ${c.dows[1]}).`;
 }
 function rcTitle(c) {
+  if (leadDaysOf(c) > 1) return `🌙 ראש חודש ${c.monthHe} מתקרב`;
   if (c.totalDays === 2 && c.dayIndex === 2) return `🌙 ראש חודש ${c.monthHe} — לקראת היום השני`;
   return `🌙 ערב ראש חודש ${c.monthHe}`;
 }
@@ -692,6 +803,21 @@ function rcMonthLine(c) {
 }
 
 // =================== renderers ===================
+
+// פירוט ימי הבלוק — נדרש כשחג נמשך יותר מיום, או כששבת נכנסת לחג.
+function shabbatDaysLine(c) {
+  const days = c.days || [];
+  if (days.length < 2) return '';
+  return days
+    .map(d => `יום ${HEB_DOW[dowOfIso(d.iso)]} (${isoToLoazi(d.iso)}) — ${d.name}`)
+    .join(' · ');
+}
+function extraCandleLabel(c, x) {
+  const day = (c.days || []).find(d => d.iso === x.forDayIso);
+  const dow = HEB_DOW[dowOfIso(x.forDayIso)];
+  return day ? `הדלקת נרות ל${day.name} (יום ${dow})` : `הדלקת נרות ליום ${dow}`;
+}
+
 function renderShabbatHtml(c) {
   const title = c.names.join(' + ');
   const rtRow = (c.jm.havdalahRT || c.ef.havdalahRT)
@@ -700,8 +826,20 @@ function renderShabbatHtml(c) {
          <td style="padding:6px 14px;color:#7a8aa0;font-size:13px;text-align:center;">${c.ef.havdalahRT || '—'}</td></tr>`
     : '';
   const banner = noticeHtml(c);
+  const daysLine = shabbatDaysLine(c);
+  const daysHtml = daysLine
+    ? `<div style="font-size:15px;line-height:1.7;color:#1b3a5b;margin:4px 2px 12px;font-weight:600;">📅 ${daysLine}</div>`
+    : '';
+  const extraRows = (c.extraCandles || []).map(x => `
+      <tr style="background:#fbf4e8;">
+        <td style="padding:12px 14px;font-weight:600;color:#8a5a00;">${extraCandleLabel(c, x)}
+          <div style="font-weight:400;font-size:12px;color:#a08050;margin-top:2px;">מאש דולקת מערב החג, לא לפני הזמן הזה</div></td>
+        <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#c0392b;">${x.jm || '—'}</td>
+        <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#c0392b;">${x.ef || '—'}</td>
+      </tr>`).join('');
   return baseEmail(`🕯️ ${title}`, c.hebDateText, `
     ${banner}
+    ${daysHtml}
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:8px;">
       <tr style="background:#1b3a5b;color:#fff;">
         <th style="padding:10px 14px;text-align:right;font-size:14px;font-weight:600;">זמן</th>
@@ -713,6 +851,7 @@ function renderShabbatHtml(c) {
         <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#c0392b;">${c.jm.candle || '—'}</td>
         <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#c0392b;">${c.ef.candle || '—'}</td>
       </tr>
+      ${extraRows}
       <tr>
         <td style="padding:12px 14px;font-weight:600;color:#1b3a5b;">צאת שבת / חג</td>
         <td style="padding:12px 14px;text-align:center;font-size:20px;font-weight:700;color:#2c5d8f;">${c.jm.havdalah || '—'}</td>
@@ -725,6 +864,7 @@ function renderShabbatHtml(c) {
 // באנר צהוב רק כשבאמת יש מה לומר: מקור חלופי, או פער חריג בין המקורות.
 function noticeHtml(c) {
   const bits = [];
+  if (c.earlyNote) bits.push(c.earlyNote);
   if (c.sourceNote) bits.push(c.sourceNote);
   if (c.crossCheckWarning) bits.push(c.crossCheckWarning);
   if (!bits.length) return '';
@@ -754,6 +894,10 @@ function renderAlertTelegram() {
 
 function renderFastHtml(c) {
   return baseEmail(`🕯️ ${c.names[0]}`, c.hebDateText, `
+    ${noticeHtml(c)}
+    <div style="font-size:17px;line-height:1.7;color:#5b3a1b;font-weight:700;margin:4px 2px 12px;">
+      ${fastLeadLine(c)}
+    </div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:8px;">
       <tr style="background:#5b3a1b;color:#fff;">
         <th style="padding:10px 14px;text-align:right;font-size:14px;font-weight:600;">זמן הצום</th>
@@ -780,6 +924,7 @@ function renderRoshChodeshHtml(c) {
         <td style="padding:12px 14px;color:#2c2350;font-size:15px;">${moladText(c.molad)}</td>
       </tr>` : '';
   return baseEmail(rcTitle(c), c.hebDateText, `
+    ${noticeHtml(c)}
     <div style="font-size:17px;line-height:1.7;color:#2c2350;font-weight:700;margin:4px 2px 10px;">
       ${rcLeadLine(c)}
     </div>
@@ -819,6 +964,7 @@ function renderNationalHtml(c) {
       ${c.greeting}
     </div>` : '';
   return baseEmail(`${c.emoji} ${c.names[0]}`, c.hebDateText, `
+    ${noticeHtml(c)}
     <div style="font-size:17px;line-height:1.7;color:#1b2b4b;font-weight:700;margin:4px 2px 12px;">
       ${nationalLeadLine(c)}
     </div>
@@ -853,6 +999,7 @@ function renderTelegram(c) {
       `<b>${nationalLeadLine(c)}</b>`,
     ];
     if (c.desc) lines.push('', c.desc);
+    if (c.earlyNote) lines.push('', `⚠️ <i>${c.earlyNote}</i>`);
     if (c.greeting) lines.push('', c.greeting);
     lines.push('', 'נשלח אוטומטית לפי הלוח העברי');
     return lines.join('\n');
@@ -871,13 +1018,16 @@ function renderTelegram(c) {
     if (c.molad) {
       lines.push('', '🌒 <b>המולד</b>', moladText(c.molad));
     }
+    if (c.earlyNote) lines.push('', `⚠️ <i>${c.earlyNote}</i>`);
     lines.push('', 'מברכים את החודש בשבת שלפניו · חודש טוב ומבורך');
     return lines.join('\n');
   }
   const head = `🕯️ <b>${c.names.join(' + ')}</b>` + (c.hebDateText ? `\n${c.hebDateText}` : '');
   if (c.kind === 'fast') {
-    return [
+    const lines = [
       head, '',
+      `<b>${fastLeadLine(c)}</b>`,
+      '',
       '🟤 <b>תחילת הצום</b>',
       `ירושלים: ${c.jm.begin || '—'}`,
       `אפרת: ${c.ef.begin || '—'}`,
@@ -885,23 +1035,39 @@ function renderTelegram(c) {
       '🔵 <b>סיום הצום</b>',
       `ירושלים: ${c.jm.end || '—'}`,
       `אפרת: ${c.ef.end || '—'}`,
-      '',
-      `צום קל ומועיל · ${c.sourceLabel || SOURCE_HEBCAL.label}`,
-    ].join('\n');
+    ];
+    if (c.earlyNote) lines.push('', `⚠️ <i>${c.earlyNote}</i>`);
+    lines.push('', `צום קל ומועיל · ${c.sourceLabel || SOURCE_HEBCAL.label}`);
+    return lines.join('\n');
   }
-  const lines = [
-    head, '',
+  const daysLine = shabbatDaysLine(c);
+  const lines = [head];
+  if (daysLine) lines.push('', `📅 ${daysLine}`);
+  lines.push(
+    '',
     '🟢 <b>הדלקת נרות / כניסה</b>',
     `ירושלים: ${c.jm.candle || '—'}`,
-    `אפרת: ${c.ef.candle || '—'}`,
+    `אפרת: ${c.ef.candle || '—'}`
+  );
+  for (const x of (c.extraCandles || [])) {
+    lines.push(
+      '',
+      `🕯️ <b>${extraCandleLabel(c, x)}</b>`,
+      `ירושלים: ${x.jm || '—'}`,
+      `אפרת: ${x.ef || '—'}`,
+      '<i>מאש דולקת מערב החג, לא לפני הזמן הזה</i>'
+    );
+  }
+  lines.push(
     '',
     '🔵 <b>צאת שבת / חג</b>',
     `ירושלים: ${c.jm.havdalah || '—'}`,
-    `אפרת: ${c.ef.havdalah || '—'}`,
-  ];
+    `אפרת: ${c.ef.havdalah || '—'}`
+  );
   if (c.jm.havdalahRT || c.ef.havdalahRT) {
     lines.push(`<i>צאת ר"ת — ירושלים: ${c.jm.havdalahRT || '—'} · אפרת: ${c.ef.havdalahRT || '—'}</i>`);
   }
+  if (c.earlyNote) lines.push('', `⚠️ <i>${c.earlyNote}</i>`);
   if (c.sourceNote) lines.push('', `⚠️ <i>${c.sourceNote}</i>`);
   if (c.crossCheckWarning) lines.push('', `⚠️ <i>${c.crossCheckWarning}</i>`);
   lines.push('', `שבת שלום ומבורך · ${c.sourceLabel || SOURCE_HEBCAL.label}`);
@@ -938,12 +1104,14 @@ function baseEmail(title, subtitle, bodyHtml, opts) {
 function subjectFor(c) {
   if (c.kind === 'alert') return '⚠️ הבוט לא הצליח להביא זמני שבת/חג';
   if (c.kind === 'national') {
+    if (leadDaysOf(c) > 1) return `${c.names[0]} — ${whenPhrase(c)}`;
     return c.eveOnset
       ? `${c.names[0]} — הערב ומחר (יום ${c.thisDow})`
       : `${c.names[0]} — מחר, יום ${c.thisDow}`;
   }
-  if (c.kind === 'fast') return `${c.names[0]} — זמני הצום (ירושלים ואפרת)`;
+  if (c.kind === 'fast') return `${c.names[0]} (${whenPhrase(c)}) — זמני הצום`;
   if (c.kind === 'roshchodesh') {
+    if (leadDaysOf(c) > 1) return `ראש חודש ${c.monthHe} — ${whenPhrase(c)}`;
     return (c.totalDays === 2 && c.dayIndex === 2)
       ? `ראש חודש ${c.monthHe} — מחר היום השני (יום ${c.thisDow})`
       : `ערב ראש חודש ${c.monthHe} — מחר יום ${c.thisDow}`;
@@ -959,6 +1127,21 @@ function htmlFor(c) {
 }
 
 function buildResults(input) {
+  const today = input.today;
+
+  // שבת/יום טוב — הבוט שותק לגמרי. כל אירוע שהערב שלפניו נופל בשבת/חג כבר
+  // הוקדם ליום חול שלפניו (ראו ההקדמה של notify בהמשך הפונקציה), כך ששתיקה
+  // כאן לא מאבדת התראה.
+  const restSet = yomTovIsoSet([input.jmShabbat, input.jmHebcal]);
+  addBlockRestDays(restSet, input.jmShabbat);
+  if (isRestDate(today, restSet)) {
+    return [{
+      shouldNotify: false,
+      reason: 'shabbat or yom tov — no notifications are sent today',
+      today: today.iso,
+    }];
+  }
+
   // מקור ראשי: Hebcal. אתר ישיבה משמש להעשרת ר"ת ולהצלבה.
   let shabbatSource = SOURCE_HEBCAL;
   let hebcalShabbat = [];
@@ -977,7 +1160,6 @@ function buildResults(input) {
     yeshivaShabbat = [];
   }
 
-  const today = input.today;
   const dueIn = list => list.filter(c => c.notify.key === today.key);
 
   // הצלבה: אם מקור אחד מזהה אירוע להיום והשני שותק — הולכים אחרי זה
@@ -1004,8 +1186,29 @@ function buildResults(input) {
   const all = shabbat.concat(fasts).concat(rc).concat(national);
   all.forEach(c => { if (!c.sourceLabel) c.sourceLabel = SOURCE_HEBCAL.label; });
 
-  const dueToday = all.filter(c => c.notify.key === today.key);
+  // ההתראה נשלחת בבוקר שלפני האירוע — אבל אם אותו בוקר הוא שבת/חג, הבוט
+  // שותק בו. לכן מזיזים את יום השליחה אחורה ליום החול האחרון שלפניו, ומסמנים
+  // כמה ימים מראש ההתראה יוצאת כדי שהניסוח ("מחר"/"ביום שני") יתאים.
+  all.forEach(c => {
+    c.naturalNotifyIso = c.notify.iso;
+    c.notify = lastWeekdayOnOrBefore(c.notify, restSet);
+    const ev = c.eventDateIso ? isoToDate(c.eventDateIso) : null;
+    c.leadDays = ev ? daysBetween(c.notify, ev) : 1;
+    if (c.leadDays > 1) c.earlyNote = EARLY_NOTE;
+  });
+
+  let dueToday = all.filter(c => c.notify.key === today.key);
   dueToday.sort((a, b) => (a.onsetKey - b.onsetKey) || (a.onsetMin - b.onsetMin));
+
+  // ראש חודש בן יומיים שהוקדם: שתי ההתראות (יום א' ויום ב') עלולות ליפול על
+  // אותו יום שליחה. ההודעה של היום הראשון כבר מפרטת את שני הימים.
+  const seenRc = {};
+  dueToday = dueToday.filter(c => {
+    if (c.kind !== 'roshchodesh') return true;
+    if (seenRc[c.monthHe]) return false;
+    seenRc[c.monthHe] = true;
+    return true;
+  });
 
   // שני המקורות נפלו — שולחים התראת תקלה במקום להיכשל בשקט.
   if (shabbatDown) {
